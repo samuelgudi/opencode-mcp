@@ -20,12 +20,17 @@
  *  - Auto-detection and auto-start of the OpenCode server
  *
  * Environment variables:
- *   OPENCODE_BASE_URL        - Base URL of the OpenCode server (default: http://127.0.0.1:4096)
+ *   OPENCODE_BASE_URL         - Base URL of the OpenCode server (default: http://127.0.0.1:4096)
  *   OPENCODE_SERVER_USERNAME  - Username for HTTP basic auth (default: opencode)
  *   OPENCODE_SERVER_PASSWORD  - Password for HTTP basic auth (optional)
  *   OPENCODE_AUTO_SERVE       - Set to "false" to disable auto-start (default: true)
  *   OPENCODE_DEFAULT_PROVIDER - Default provider ID when not specified per-tool (optional)
  *   OPENCODE_DEFAULT_MODEL    - Default model ID when not specified per-tool (optional)
+ *   OPENCODE_ENABLED_TOOLS    - Comma-separated allowlist of tool names. When set, only
+ *                               these tools are registered on the MCP server — all others
+ *                               become no-ops. Useful to reduce the exposed tool surface
+ *                               for LLM clients that only need a subset of the 79 tools.
+ *                               Unset or empty = default behavior (all tools registered).
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -33,6 +38,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { OpenCodeClient } from "./client.js";
 import { ensureServer } from "./server-manager.js";
 import { setModelDefaults } from "./helpers.js";
+import { applyToolFilter, parseEnabledTools } from "./tool-filter.js";
 
 // Tool groups
 import { registerGlobalTools } from "./tools/global.js";
@@ -166,6 +172,13 @@ const server = new McpServer(
   },
 );
 
+// ── Optional tool filter ────────────────────────────────────────────
+// When OPENCODE_ENABLED_TOOLS is set, `server.tool(...)` calls for tools
+// not in the allowlist become no-ops. Must run BEFORE any register*Tools
+// call so the filter observes every registration.
+const enabledTools = parseEnabledTools(process.env.OPENCODE_ENABLED_TOOLS);
+const toolFilterResult = applyToolFilter(server, enabledTools);
+
 // ── Low-level API tools ─────────────────────────────────────────────
 registerGlobalTools(server, client);
 registerConfigTools(server, client);
@@ -190,6 +203,16 @@ registerResources(server, client);
 
 // ── Prompts ─────────────────────────────────────────────────────────
 registerPrompts(server);
+
+// Log tool filter summary after all registrations, to stderr so it does
+// not corrupt the stdio MCP channel on stdout.
+if (enabledTools) {
+  console.error(
+    `[opencode-mcp] OPENCODE_ENABLED_TOOLS active: ` +
+      `${toolFilterResult.registered.length} tools registered, ` +
+      `${toolFilterResult.skipped.length} tools skipped.`,
+  );
+}
 
 // ── Start ───────────────────────────────────────────────────────────
 async function main() {
