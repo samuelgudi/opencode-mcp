@@ -9,6 +9,7 @@
 import { z } from "zod";
 import { existsSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
+import { isToolEnabled } from "./tool-filter.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -361,14 +362,24 @@ export function analyzeMessageResponse(response: unknown): {
   warning: string | null;
 } {
   if (response === null || response === undefined) {
+    const suggestions: string[] = [];
+    if (isToolEnabled("opencode_setup")) {
+      suggestions.push("Use `opencode_setup` to check provider status");
+    }
+    if (isToolEnabled("opencode_auth_set")) {
+      suggestions.push("use `opencode_auth_set` to configure an API key");
+    } else {
+      suggestions.push(
+        "set a provider API key via an env var (e.g. `ANTHROPIC_API_KEY`) and restart the server",
+      );
+    }
     return {
       isEmpty: true,
       hasError: false,
       warning:
         "The AI returned an empty response. This usually means the provider " +
         "is not configured or the API key is missing/invalid. " +
-        "Use `opencode_setup` to check provider status, or " +
-        "`opencode_auth_set` to configure an API key.",
+        (suggestions.length > 0 ? suggestions.join(", ") + "." : ""),
     };
   }
 
@@ -393,7 +404,9 @@ export function analyzeMessageResponse(response: unknown): {
       warning:
         `The response contains an error: ${typeof firstError === "string" ? firstError : JSON.stringify(firstError)}. ` +
         "This may indicate an authentication issue. " +
-        "Use `opencode_auth_set` to verify your API key.",
+        (isToolEnabled("opencode_auth_set")
+          ? "Use `opencode_auth_set` to verify your API key."
+          : "Verify your API key (env var or config)."),
     };
   }
 
@@ -410,7 +423,9 @@ export function analyzeMessageResponse(response: unknown): {
       warning:
         "The AI returned a response with no text content. This usually means " +
         "the provider API key is missing or the model is unavailable. " +
-        "Try a different provider/model, or use `opencode_auth_set` to configure credentials.",
+        (isToolEnabled("opencode_auth_set")
+          ? "Try a different provider/model, or use `opencode_auth_set` to configure credentials."
+          : "Try a different provider/model, or configure credentials via env vars."),
     };
   }
 
@@ -580,37 +595,62 @@ function diagnoseError(msg: string): string {
   const lower = msg.toLowerCase();
   const tips: string[] = [];
 
+  // Helper: push a tip only if the tool it references is currently
+  // enabled. `null` tool means the tip references no tool and should
+  // always be shown.
+  const pushIf = (tool: string | null, tip: string) => {
+    if (tool === null || isToolEnabled(tool)) tips.push(tip);
+  };
+
   if (lower.includes("api key") || lower.includes("401") || lower.includes("403") || lower.includes("unauthorized") || lower.includes("forbidden")) {
-    tips.push("- Check credentials with `opencode_provider_test`");
-    tips.push("- Set a key with `opencode_auth_set`");
+    pushIf("opencode_provider_test", "- Check credentials with `opencode_provider_test`");
+    pushIf("opencode_auth_set", "- Set a key with `opencode_auth_set`");
+    if (!isToolEnabled("opencode_auth_set")) {
+      pushIf(null, "- Set a provider API key via an env var and restart the server");
+    }
   } else if (lower.includes("timeout") || lower.includes("timed out") || lower.includes("aborted")) {
-    tips.push("- Use `opencode_run` for complex tasks (handles polling automatically)");
-    tips.push("- Or use `opencode_message_send_async` + `opencode_wait` for manual control");
-    tips.push("- Check session progress with `opencode_conversation`");
+    pushIf("opencode_run", "- Use `opencode_run` for complex tasks (handles polling automatically)");
+    if (isToolEnabled("opencode_message_send_async") && isToolEnabled("opencode_wait")) {
+      pushIf(null, "- Or use `opencode_message_send_async` + `opencode_wait` for manual control");
+    } else if (isToolEnabled("opencode_fire") && isToolEnabled("opencode_wait")) {
+      pushIf(null, "- Or use `opencode_fire` + `opencode_wait` for manual control");
+    }
+    pushIf("opencode_conversation", "- Check session progress with `opencode_conversation`");
+    pushIf("opencode_check", "- Check session progress with `opencode_check`");
   } else if (lower.includes("not found") && lower.includes("session")) {
-    tips.push("- List active sessions with `opencode_sessions_overview`");
+    pushIf("opencode_sessions_overview", "- List active sessions with `opencode_sessions_overview`");
   } else if (lower.includes("rate limit") || lower.includes("429")) {
-    tips.push("- Wait a moment and retry, or switch provider");
-    tips.push("- Try a free model: `opencode_ask` with providerID `opencode`, modelID `minimax-m2.1-free`");
+    pushIf(null, "- Wait a moment and retry, or switch provider");
+    const taskTool = isToolEnabled("opencode_run")
+      ? "opencode_run"
+      : isToolEnabled("opencode_ask")
+        ? "opencode_ask"
+        : null;
+    if (taskTool) {
+      pushIf(
+        null,
+        `- Try a free model: \`${taskTool}\` with providerID \`opencode\`, modelID \`minimax-m2.1-free\``,
+      );
+    }
   } else if (lower.includes("econnrefused")) {
-    tips.push("- The OpenCode server is not accepting connections");
-    tips.push("- Is `opencode serve` running? Check with `opencode_setup`");
-    tips.push("- Verify OPENCODE_BASE_URL is correct (default: http://127.0.0.1:4096)");
-    tips.push("- The server will auto-reconnect on the next request if OPENCODE_AUTO_SERVE is enabled");
+    pushIf(null, "- The OpenCode server is not accepting connections");
+    pushIf("opencode_setup", "- Is `opencode serve` running? Check with `opencode_setup`");
+    pushIf(null, "- Verify OPENCODE_BASE_URL is correct (default: http://127.0.0.1:4096)");
+    pushIf(null, "- The server will auto-reconnect on the next request if OPENCODE_AUTO_SERVE is enabled");
   } else if (lower.includes("enotfound") || lower.includes("ehostunreach")) {
-    tips.push("- Cannot reach the OpenCode server host");
-    tips.push("- Check that OPENCODE_BASE_URL points to a reachable address");
-    tips.push("- If running remotely, verify network connectivity");
+    pushIf(null, "- Cannot reach the OpenCode server host");
+    pushIf(null, "- Check that OPENCODE_BASE_URL points to a reachable address");
+    pushIf(null, "- If running remotely, verify network connectivity");
   } else if (lower.includes("etimedout")) {
-    tips.push("- The server is not responding (connection timed out)");
-    tips.push("- The server may be overloaded or starting up — retry in a few seconds");
-    tips.push("- Check with `opencode_setup` to verify server health");
+    pushIf(null, "- The server is not responding (connection timed out)");
+    pushIf(null, "- The server may be overloaded or starting up — retry in a few seconds");
+    pushIf("opencode_setup", "- Check with `opencode_setup` to verify server health");
   } else if (lower.includes("unreachable") || lower.includes("fetch failed")) {
-    tips.push("- Is `opencode serve` running? Check with `opencode_setup`");
-    tips.push("- Verify OPENCODE_BASE_URL is correct (default: http://127.0.0.1:4096)");
+    pushIf("opencode_setup", "- Is `opencode serve` running? Check with `opencode_setup`");
+    pushIf(null, "- Verify OPENCODE_BASE_URL is correct (default: http://127.0.0.1:4096)");
   } else if (lower.includes("directory not found") || lower.includes("not an absolute path")) {
-    tips.push("- The `directory` parameter must be an absolute path to an existing directory");
-    tips.push("- Example: `/home/user/my-project` (not `./my-project` or `~/my-project`)");
+    pushIf(null, "- The `directory` parameter must be an absolute path to an existing directory");
+    pushIf(null, "- Example: `/home/user/my-project` (POSIX) or `C:\\\\Users\\\\me\\\\my-project` (Windows)");
   }
 
   return tips.join("\n");

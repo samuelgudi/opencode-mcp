@@ -21,6 +21,7 @@ import {
   directoryParam,
   readOnly,
 } from "../helpers.js";
+import { isToolEnabled, pickTaskTool } from "../tool-filter.js";
 
 export function registerWorkflowTools(
   server: McpServer,
@@ -128,7 +129,13 @@ export function registerWorkflowTools(
                   .map((m) => m.label as string);
                 if (labels.length > 0) methods.push(`OAuth (${labels[0]})`);
               }
-              if (envHint) methods.push(`\`opencode_auth_set\` or env var \`${envVars[0]}\``);
+              if (envHint) {
+                methods.push(
+                  isToolEnabled("opencode_auth_set")
+                    ? `\`opencode_auth_set\` or env var \`${envVars[0]}\``
+                    : `env var \`${envVars[0]}\``,
+                );
+              }
 
               // Check for free models
               const rawModels = p.models;
@@ -154,7 +161,12 @@ export function registerWorkflowTools(
             }
 
             if (otherCount > 0) {
-              providerLines.push(`\n+${otherCount} more providers available. Use \`opencode_provider_list\` to see all.`);
+              const hint = isToolEnabled("opencode_provider_list")
+                ? " Use `opencode_provider_list` to see all."
+                : "";
+              providerLines.push(
+                `\n+${otherCount} more providers available.${hint}`,
+              );
             }
 
             sections.push(`## Providers (${providers.length} available)\n${providerLines.join("\n")}`);
@@ -196,20 +208,57 @@ export function registerWorkflowTools(
         const hasProject = sections.some((s) => s.startsWith("## Project\nName:"));
 
         if (!hasReady) {
-          // No providers configured — guide them to set one up
+          // No providers configured — guide them to set one up. Each
+          // numbered option is gated on whether the tool it references
+          // is still enabled, so filtered setups do not suggest calling
+          // tools that have been removed from the allowlist.
           tips.push("**You need to configure a provider first.** Options:");
-          tips.push("1. Set an API key: `opencode_auth_set` with providerId (e.g. 'anthropic', 'openai', 'google')");
-          tips.push("2. Set an env var (e.g. `OPENROUTER_API_KEY`, `HF_TOKEN`, `ANTHROPIC_API_KEY`) and restart opencode");
-          tips.push("3. Try **firmware** — it has 23 free models, no API key needed. Use `opencode_ask` with `providerID: 'firmware'`");
+          let optionNum = 1;
+          if (isToolEnabled("opencode_auth_set")) {
+            tips.push(
+              `${optionNum++}. Set an API key: \`opencode_auth_set\` with providerId (e.g. 'anthropic', 'openai', 'google')`,
+            );
+          }
+          tips.push(
+            `${optionNum++}. Set an env var (e.g. \`OPENROUTER_API_KEY\`, \`HF_TOKEN\`, \`ANTHROPIC_API_KEY\`) and restart opencode`,
+          );
+          const taskTool = pickTaskTool();
+          if (taskTool) {
+            tips.push(
+              `${optionNum++}. Try **firmware** — it has 23 free models, no API key needed. Use \`${taskTool}\` with \`providerID: 'firmware'\``,
+            );
+          }
         } else {
-          // Providers ready — guide to first task
+          // Providers ready — guide to first task. Pick the best
+          // available "run a task" tool from the allowlist.
           tips.push("**You're ready to go!** Try:");
-          tips.push("- `opencode_ask` — ask a question or give an instruction (easiest way to start)");
+          const taskTool = pickTaskTool();
+          if (taskTool === "opencode_run") {
+            tips.push(
+              "- `opencode_run` — send a task and wait for completion (recommended for coding work)",
+            );
+          } else if (taskTool === "opencode_ask") {
+            tips.push(
+              "- `opencode_ask` — ask a question or give an instruction (easiest way to start)",
+            );
+          } else if (taskTool === "opencode_fire") {
+            tips.push(
+              "- `opencode_fire` — start a task and poll progress with `opencode_check`",
+            );
+          }
           if (!hasProject) {
             tips.push("- Pass a `directory` parameter to target a specific project");
           }
-          tips.push("- `opencode_context` — get full project context (config, VCS, agents)");
-          tips.push("- `opencode_provider_models` — explore available models for your configured providers");
+          if (isToolEnabled("opencode_context")) {
+            tips.push(
+              "- `opencode_context` — get full project context (config, VCS, agents)",
+            );
+          }
+          if (isToolEnabled("opencode_provider_models")) {
+            tips.push(
+              "- `opencode_provider_models` — explore available models for your configured providers",
+            );
+          }
         }
         sections.push(`## Next Steps\n${tips.join("\n")}`);
 

@@ -42,6 +42,7 @@ import {
   applyToolFilter,
   buildFilteredInstructions,
   parseEnabledTools,
+  setCurrentAllowlist,
 } from "./tool-filter.js";
 
 // Tool groups
@@ -81,6 +82,12 @@ const exModel = defaultModel || "<your-model>";
 // unset this is `null` and the server keeps the original full-surface
 // behaviour (all 79 tools registered, full tiered guide in instructions).
 const enabledTools = parseEnabledTools(process.env.OPENCODE_ENABLED_TOOLS);
+
+// Publish the allowlist so tool handlers can gate their response text
+// (e.g. the opencode_setup "Next Steps" section) without re-parsing the
+// env var on every call. When `enabledTools` is null this clears any
+// previous state and every tool is treated as enabled.
+setCurrentAllowlist(enabledTools);
 
 const fullInstructions = [
   "# OpenCode MCP — Guide for LLM Clients",

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { OpenCodeClient } from "../client.js";
 import { toolJson, toolError, toolResult, directoryParam, isProviderConfigured } from "../helpers.js";
+import { isToolEnabled } from "../tool-filter.js";
 
 export function registerProviderTools(
   server: McpServer,
@@ -45,7 +46,11 @@ export function registerProviderTools(
             lines.push(`- ${id}: ${mc} model${mc !== 1 ? "s" : ""}${envVars}`);
           }
         } else {
-          lines.push("**No providers configured.** Use `opencode_auth_set` or set environment variables.");
+          lines.push(
+            isToolEnabled("opencode_auth_set")
+              ? "**No providers configured.** Use `opencode_auth_set` or set environment variables."
+              : "**No providers configured.** Set a provider API key via an environment variable (e.g. `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`) and restart the server.",
+          );
         }
 
         if (unconfigured.length > 0) {

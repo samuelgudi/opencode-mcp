@@ -16,6 +16,57 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
+// ── Module-level current allowlist ──────────────────────────────────
+// The parsed allowlist is published once at server startup so that tool
+// handlers can gate response text without having to re-parse the env
+// var on every call. Null means "no filter active, every tool is
+// enabled".
+let currentAllowlist: Set<string> | null = null;
+
+/**
+ * Publish the active tool allowlist. `null` clears it (back to default
+ * behavior where every tool is treated as enabled). Call this once at
+ * server startup, after parseEnabledTools, before any tool handler runs.
+ */
+export function setCurrentAllowlist(allowlist: Set<string> | null): void {
+  currentAllowlist = allowlist;
+}
+
+/**
+ * Read the active allowlist. Primarily for tests and introspection;
+ * handler code should prefer the `isToolEnabled` query below.
+ */
+export function getCurrentAllowlist(): Set<string> | null {
+  return currentAllowlist;
+}
+
+/**
+ * Returns true if the given tool name is currently registered on the
+ * server. When no filter is active (allowlist is null), every tool is
+ * considered enabled. Use this inside tool handlers to gate suggestions
+ * in response text so that a filtered setup does not recommend calling
+ * tools that no longer exist.
+ */
+export function isToolEnabled(name: string): boolean {
+  if (!currentAllowlist) return true;
+  return currentAllowlist.has(name);
+}
+
+/**
+ * Preference-ordered choice of the best "task runner" tool from the
+ * active allowlist: `opencode_run` (recommended workflow) first, then
+ * `opencode_ask` (simple one-shot), then `opencode_fire` (async). When
+ * no filter is active, returns `opencode_run` directly. When a filter
+ * is active but none of these three are enabled, returns `null` so
+ * callers can omit the suggestion entirely.
+ */
+export function pickTaskTool(): string | null {
+  if (isToolEnabled("opencode_run")) return "opencode_run";
+  if (isToolEnabled("opencode_ask")) return "opencode_ask";
+  if (isToolEnabled("opencode_fire")) return "opencode_fire";
+  return null;
+}
+
 /**
  * Parse the OPENCODE_ENABLED_TOOLS env var value into a Set of allowed
  * tool names. Returns `null` when the value is undefined, empty, or
